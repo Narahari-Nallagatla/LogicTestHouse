@@ -9,7 +9,6 @@ variables:
   serviceConnectionName: 'MyAzureResourceConnection' 
   appServiceName: 'DemoLogicAppApi'
   resourceGroupName: 'WP_SL_User_187'
-  # Global variable pointing to the location where NuGet stores packages on Windows agents
   NUGET_PACKAGES_DIRECTORY: '$(Pipeline.Workspace)/.nuget/packages'
 
 stages:
@@ -22,7 +21,6 @@ stages:
   jobs:
   - job: BuildJob
     steps:
-    # 1. Check for Pre-installed .NET SDK to save installation time
     - task: UseDotNet@2
       displayName: 'Use Pre-installed .NET SDK'
       inputs:
@@ -30,23 +28,21 @@ stages:
         version: '9.x'
         performMultiLevelLookup: true
 
-    # 2. KEY ADDITION: Smart Cache layer for NuGet packages
+    # OPTIMIZED FIX: Fingerprint is now generated using the existing .csproj file structure
     - task: Cache@2
       displayName: 'Cache NuGet Packages'
       inputs:
-        key: 'nuget | "$(Agent.OS)" | **/packages.lock.json, !**/bin/**, !**/obj/**'
+        key: 'nuget | "$(Agent.OS)" | **/AecsTestDeployWebApp.csproj'
         restoreKeys: |
           nuget | "$(Agent.OS)"
         path: $(NUGET_PACKAGES_DIRECTORY)
-        cacheHitVar: 'CACHE_RESTORED' # Sets a true/false variable if packages are found
+        cacheHitVar: 'CACHE_RESTORED'
 
-    # 3. Restore NuGet dependencies (Skips downloads if CACHE_RESTORED is true)
     - task: DotNetCoreCLI@2
       displayName: 'Restore NuGet Dependencies'
       inputs:
         command: restore
         projects: '**/*.csproj'
-        # Instructs the .NET CLI to look directly into our custom cache directory path
         restoreArguments: '--packages $(NUGET_PACKAGES_DIRECTORY)'
 
     - task: DotNetCoreCLI@2
@@ -54,7 +50,7 @@ stages:
       inputs:
         command: build
         projects: '**/*.csproj'
-        arguments: '--configuration $(buildConfiguration) --no-restore' # --no-restore saves extra time
+        arguments: '--configuration $(buildConfiguration) --no-restore'
 
     - task: DotNetCoreCLI@2
       displayName: 'Publish Deployment Package'
@@ -87,7 +83,6 @@ stages:
         azureSubscription: '$(serviceConnectionName)'
         appType: 'webApp'
         appName: '$(appServiceName)'
-        # OPTIMIZED ACTION: If your App Service does not have slots enabled, set this to false
         deployToSlotOrASE: true
         resourceGroupName: '$(resourceGroupName)'
         slotName: 'staging-qa'
