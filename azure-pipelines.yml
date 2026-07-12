@@ -104,13 +104,38 @@ stages:
         script: |
           $appName = "$(appServiceName)"
           $url = "https://$appName-staging-qa.azurewebsites.net/api/customers"
+          
+          Write-Host "Target Testing URL: $url"
+          
+          # Retry loop to allow the Azure App Service up to 30 seconds to wake up (Cold Start)
+          $retryCount = 0
+          $maxRetries = 3
+          $success = $false
+
+          while ($retryCount -lt $maxRetries -and -not $success) {
           try {
-              $response = Invoke-RestMethod -Uri $url -Method Get
-              Write-Host "SUCCESS: GET Customer Test Passed"
+                  Write-Host "Attempt $($retryCount + 1): Sending GET request to application slot..."
+                  $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10
+                  
+                  # Log the response to the pipeline output window for easy debugging
+                  Write-Host "Response received: $($response | ConvertTo-Json -Compress)"
+                  $success = $true
           } catch {
-              Write-Error "FAILURE: GET Customer Test Failed"
-              throw
+                  Write-Host "Warning: Application is still warming up or returned an error: $_"
+                  $retryCount++
+                  if ($retryCount -lt $maxRetries) {
+                      Write-Host "Waiting 10 seconds before retrying..."
+                      Start-Sleep -Seconds 10
+                  }
+              }
           }
+
+          if (-not $success) {
+              Write-Error "FAILURE: GET Customer Test Failed after $maxRetries attempts."
+              throw "Application endpoint did not respond successfully."
+          }
+          
+          Write-Host "SUCCESS: GET Baseline Endpoint Test Passed"
 
     - task: PowerShell@2
       displayName: 'Execute HTTP POST Creation Test'
@@ -128,9 +153,11 @@ stages:
               city = "Chennai"
           } | ConvertTo-Json
 
+          Write-Host "Sending POST request to create customer ID: $customerId"
           Invoke-RestMethod -Uri $baseUrl -Method Post -Body $body -ContentType "application/json"
           Write-Host "SUCCESS: POST Execution Completed"
 
+          Write-Host "Verifying customer records by hitting: $baseUrl/$customerId"
           $customer = Invoke-RestMethod -Uri "$baseUrl/$customerId" -Method Get
           if ($customer.id -eq $customerId) {
               Write-Host "SUCCESS: Verification Logic Integrity Validated"
