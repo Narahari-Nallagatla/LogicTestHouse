@@ -6,14 +6,18 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
+  serviceConnectionName: 'MyAzureResourceConnection' 
+  appServiceName: 'DemoLogicAppApi'
+  resourceGroupName: 'WP_SL_User_187'
   NUGET_PACKAGES_DIRECTORY: '$(Pipeline.Workspace)/.nuget/packages'
 
 stages:
-# ==========================================================
-# STAGE 1: COMPILATION & ARTIFACT PACKAGING ONLY
-# ==========================================================
+
+# ==========================================
+# STAGE 1: COMPILATION & PACKAGING (BUILD)
+# ==========================================
 - stage: Build
-  displayName: 'Build MVC Application Artifact'
+  displayName: 'Build C# Application'
   jobs:
   - job: BuildJob
     steps:
@@ -55,7 +59,63 @@ stages:
         arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory) --no-restore'
         zipAfterPublish: true
 
-    # The resulting drop artifact will be consumed by the Classic Release Pipeline
     - publish: $(Build.ArtifactStagingDirectory)
       artifact: drop
-      displayName: 'Upload Build Artifact drop'
+      displayName: 'Upload Artifact to Pipeline Workspace'
+
+# ==========================================
+# STAGE 2: STAGE-QA DEPLOYMENT
+# ==========================================
+- stage: Stage_QA
+  displayName: 'Stage-QA Deployment'
+  dependsOn: Build
+  jobs:
+  - deployment: DeployToStagingSlot
+    displayName: 'Deploy Package to Staging-QA Slot'
+    environment: 'QA-Environment'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+            displayName: 'Download Compilation Artifacts'
+
+          - task: AzureWebApp@1
+            displayName: 'Deploy to App Service Staging Slot'
+            inputs:
+              azureSubscription: '$(serviceConnectionName)'
+              appType: 'webApp'
+              appName: '$(appServiceName)'
+              deployToSlotOrASE: true
+              resourceGroupName: '$(resourceGroupName)'
+              slotName: 'staging-qa'
+              package: '$(Pipeline.Workspace)/drop/**/*.zip'
+
+# ==========================================
+# STAGE 3: STAGE-PROD DEPLOYMENT (WITH GATEWAY)
+# ==========================================
+- stage: Stage_Prod
+  displayName: 'Stage-Prod Deployment'
+  dependsOn: Stage_QA
+  jobs:
+  # The targeted environment triggers the automated approval window in modern DevOps
+  - deployment: DeployToProdSlot
+    displayName: 'Deploy Package to Production Slot'
+    environment: 'Production-Environment' 
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+            displayName: 'Download Compilation Artifacts'
+
+          - task: AzureWebApp@1
+            displayName: 'Deploy to Main Production App Service'
+            inputs:
+              azureSubscription: '$(serviceConnectionName)'
+              appType: 'webApp'
+              appName: '$(appServiceName)'
+              deployToSlotOrASE: false # False drops code directly into the production url slot
+              package: '$(Pipeline.Workspace)/drop/**/*.zip'
