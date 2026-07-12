@@ -28,15 +28,6 @@ stages:
         version: '9.x'
         performMultiLevelLookup: true
 
-    - task: Cache@2
-      displayName: 'Cache NuGet Packages'
-      inputs:
-        key: 'nuget | "$(Agent.OS)" | **/*.csproj'
-        restoreKeys: |
-          nuget | "$(Agent.OS)"
-        path: $(NUGET_PACKAGES_DIRECTORY)
-        cacheHitVar: 'CACHE_RESTORED'
-
     - task: DotNetCoreCLI@2
       displayName: 'Restore NuGet Dependencies'
       inputs:
@@ -72,7 +63,7 @@ stages:
   jobs:
   - deployment: DeployToStagingSlot
     displayName: 'Deploy Package to Staging-QA Slot'
-    environment: 'QA-Environment'
+    environment: 'QA' # Targets your pre-existing QA environment resource
     strategy:
       runOnce:
         deploy:
@@ -99,10 +90,9 @@ stages:
   displayName: 'Stage-Prod Deployment'
   dependsOn: Stage_QA
   jobs:
-  # The targeted environment triggers the automated approval window in modern DevOps
   - deployment: DeployToProdSlot
     displayName: 'Deploy Package to Production Slot'
-    environment: 'Production-Environment' 
+    environment: 'Production' # Targets the UI environment containing your user approval check
     strategy:
       runOnce:
         deploy:
@@ -117,5 +107,5 @@ stages:
               azureSubscription: '$(serviceConnectionName)'
               appType: 'webApp'
               appName: '$(appServiceName)'
-              deployToSlotOrASE: false # False drops code directly into the production url slot
+              deployToSlotOrASE: false # Deploying directly to the primary production slot
               package: '$(Pipeline.Workspace)/drop/**/*.zip'
