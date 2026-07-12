@@ -141,8 +141,9 @@ stages:
           $body = @{
               id = $customerId
               name = "Hari Pipeline"
-              email = "hari@test.com"
-              city = "Chennai"
+              phoneNo = "9876543210"
+              address = "Chennai"
+              amt     = 5000
           } | ConvertTo-Json
 
           Write-Host "Sending POST to: $baseUrl"
@@ -187,16 +188,16 @@ stages:
           }
           Write-Host "SUCCESS: Performance within bounds."
 # ==========================================
-# STAGE 5: AUTOMATED PRODUCTION PROMOTION
+# STAGE 5: AUTOMATED PRODUCTION PROMOTION & TESTING
 # ==========================================
 - stage: PromoteToProduction
-  displayName: 'Promote Code to Production'
-  # This stage executes only after all QA tests and performance metrics pass cleanly
+  displayName: 'Promote and Test Production'
   dependsOn: NonFunctionalTest
   jobs:
   - job: SwapSlotsJob
     displayName: 'Swap Staging Slot into Production'
     steps:
+    # 1. Swap the verified code into the production environment
     - task: AzureAppServiceManage@0
       displayName: 'Execute Azure Slot Swap'
       inputs:
@@ -205,4 +206,68 @@ stages:
         WebAppName: '$(appServiceName)'
         ResourceGroupName: '$(resourceGroupName)'
         SourceSlot: 'staging-qa'
-        # Leaving TargetSlot blank tells Azure DevOps to target the primary Production slot automatically
+
+    # 2. NEW TESTING ADDITION: Dynamic HTTP POST to the real Production URL
+    - task: AzurePowerShell@5
+      displayName: 'Production Functional POST Verification'
+      inputs:
+        azureSubscription: '$(serviceConnectionName)'
+        ScriptType: 'InlineScript'
+        azurePowerShellVersion: 'LatestVersion'
+        Inline: |
+          # Fetch production app settings dynamically
+          $prodApp = Get-AzWebApp -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)"
+          $baseUrl = "https://$($prodApp.DefaultHostName)/api/customers"
+          $prodCustomerId = 88888
+          
+          $body = @{
+              id      = $prodCustomerId
+              name    = "Production Live Tester"
+              phoneNo = "1112223333"
+              address = "Live Environment"
+              amt     = 9999
+          } | ConvertTo-Json
+
+          Write-Host "Targeting Live Production Endpoint: $baseUrl"
+          
+          # Retry execution in case production IIS worker process is starting up
+          $success = $false
+          for ($i=1; $i -le 3; $i++) {
+              try {
+                  Write-Host "Sending automated POST verification record (Attempt $i)..."
+                  Invoke-RestMethod -Uri $baseUrl -Method Post -Body $body -ContentType "application/json" -TimeoutSec 15
+                  $success = $true
+                  break
+              } catch {
+                  Write-Host "Production warming up: $_"
+                  Start-Sleep -Seconds 10
+              }
+          }
+          if (-not $success) { throw "CRITICAL: Live Production writing failed." }
+          Write-Host "SUCCESS: Live Production POST Data Seeding Complete."
+
+    # 3. NEW TESTING ADDITION: Dynamic HTTP GET to check the created record on Production
+    - task: AzurePowerShell@5
+      displayName: 'Production Functional GET Verification'
+      inputs:
+        azureSubscription: '$(serviceConnectionName)'
+        ScriptType: 'InlineScript'
+        azurePowerShellVersion: 'LatestVersion'
+        Inline: |
+          $prodApp = Get-AzWebApp -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)"
+          $url = "https://$($prodApp.DefaultHostName)/api/customers/88888"
+          
+          Write-Host "Querying Production URL: $url"
+          try {
+              $customer = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 15
+              Write-Host "Production Verification Payload: $($customer | ConvertTo-Json -Compress)"
+              
+              if ($customer.id -eq 88888) {
+                  Write-Host "SUCCESS: Production Data Verification Completed Perfectly!"
+              } else {
+                  throw "Data validation mismatch on production."
+              }
+          } catch {
+              Write-Error "CRITICAL: Production GET Verification Failed: $_"
+              throw
+          }
