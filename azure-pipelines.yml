@@ -1,0 +1,158 @@
+# ASP.NET Core (.NET Framework)
+# Build and test ASP.NET Core projects targeting the full .NET Framework.
+# Add steps that publish symbols, save build artifacts, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+
+trigger:
+- master
+
+pool:
+  vmImage: 'windows-latest'
+
+variables:
+  buildConfiguration: 'Release'
+
+stages:
+
+# ==========================================
+# STAGE 1: COMPILATION & ARTIFACT PACKAGING
+# ==========================================
+- stage: Build
+  displayName: 'Build MVC Application'
+  jobs:
+  - job: BuildJob
+    steps:
+    - task: UseDotNet@2
+      displayName: 'Install .NET 9 SDK'
+      inputs:
+        packageType: sdk
+        version: '9.x'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore NuGet Dependencies'
+      inputs:
+        command: restore
+        projects: '**/*.csproj'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Compile Project Binaries'
+      inputs:
+        command: build
+        projects: '**/*.csproj'
+        arguments: '--configuration $(buildConfiguration)'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish Deployment Package'
+      inputs:
+        command: publish
+        publishWebProjects: true
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+        zipAfterPublish: true
+
+    - publish: $(Build.ArtifactStagingDirectory)
+      artifact: drop
+      displayName: 'Upload Artifact to Pipeline Workspace'
+
+# ==========================================
+# STAGE 2: QA TARGET DEPLOYMENT
+# ==========================================
+- stage: DeployQA
+  displayName: 'Deploy to QA Environment'
+  dependsOn: Build
+  jobs:
+  - deployment: QADeploy
+    environment: QA
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+            displayName: 'Download Compilation Artifacts'
+
+          - task: AzureWebApp@1
+            displayName: 'Deploy Package to Staging Slot'
+            inputs:
+              azureSubscription: 'myservice-connection' # Update to match your approved Service Connection
+              appType: 'webApp'
+              appName: 'aecstestdeployWebApp'            # Update to match your Azure App Service Name
+              deployToSlotOrASE: true
+              resourceGroupName: 'WP_SL_User_087'
+              slotName: 'staging-qa'
+              package: '$(Pipeline.Workspace)/drop/**/*.zip'
+
+# ==========================================
+# STAGE 3: QA FUNCTIONAL TEST VERIFICATION
+# ==========================================
+- stage: APIFunctionalTest
+  displayName: 'API Functional Validation'
+  dependsOn: DeployQA
+  jobs:
+  - job: ValidateAPI
+    steps:
+    - task: PowerShell@2
+      displayName: 'Execute HTTP GET Endpoint Test'
+      inputs:
+        targetType: inline
+        script: |
+          $url = "https://aecstestdeploywebapp-staging-qa.azurewebsites.net/api/customers"
+          try {
+              $response = Invoke-RestMethod -Uri $url -Method Get
+              Write-Host "SUCCESS: GET Customer Test Passed"
+          } catch {
+              Write-Error "FAILURE: GET Customer Test Failed"
+              throw
+          }
+
+    - task: PowerShell@2
+      displayName: 'Execute HTTP POST Creation Test'
+      inputs:
+        targetType: inline
+        script: |
+          $baseUrl = "https://aecstestdeploywebapp-staging-qa.azurewebsites.net/api/customers"
+          $customerId = Get-Random -Minimum 10000 -Maximum 99999
+          
+          $body = @{
+              id = $customerId
+              name = "Annie Pipeline"
+              email = "annie@test.com"
+              city = "Chennai"
+          } | ConvertTo-Json
+
+          Invoke-RestMethod -Uri $baseUrl -Method Post -Body $body -ContentType "application/json"
+          Write-Host "SUCCESS: POST Execution Completed"
+
+          $customer = Invoke-RestMethod -Uri "$baseUrl/$customerId" -Method Get
+          if ($customer.id -eq $customerId) {
+              Write-Host "SUCCESS: Verification Logic Integrity Validated"
+          } else {
+              throw "FAILURE: Verification Mismatch Detected"
+          }
+
+# ==========================================
+# STAGE 4: NON-FUNCTIONAL PERFORMANCE TESTS
+# ==========================================
+- stage: NonFunctionalTest
+  displayName: 'Performance Metric Verification'
+  dependsOn: APIFunctionalTest
+  jobs:
+  - job: PerformanceValidation
+    steps:
+    - task: PowerShell@2
+      displayName: 'Verify Response Time Tolerances'
+      inputs:
+        targetType: inline
+        script: |
+          $url = "https://aecsazuredevopslogicapp.azurewebsites.net/api/customers"
+          $watch = [System.Diagnostics.Stopwatch]::StartNew()
+          
+          Invoke-RestMethod -Uri $url -Method Get
+          $watch.Stop()
+          
+          $elapsed = $watch.ElapsedMilliseconds
+          Write-Host "Measured Response Metric = $elapsed ms"
+
+          if ($elapsed -gt 3000) {
+              throw "FAILURE: Latency breach. Performance took more than 3 seconds."
+          }
+          Write-Host "SUCCESS: Latency metrics within target bounds."
