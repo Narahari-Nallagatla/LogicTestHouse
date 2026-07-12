@@ -97,53 +97,48 @@ stages:
   jobs:
   - job: ValidateAPI
     steps:
-    - task: PowerShell@2
-      displayName: 'Execute HTTP GET Endpoint Test'
+    # OPTIMIZED: Changed to an Azure PowerShell task to dynamically find the correct slot URL directly from Azure
+    - task: AzurePowerShell@5
+      displayName: 'Execute Dynamic HTTP GET Endpoint Test'
       inputs:
-        targetType: inline
-        script: |
-          $appName = "$(appServiceName)"
-          $url = "https://$appName-staging-qa.azurewebsites.net/api/customers"
+        azureSubscription: '$(serviceConnectionName)'
+        ScriptType: 'InlineScript'
+        azurePowerShellVersion: 'LatestVersion'
+        Inline: |
+          $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
+          $defaultHostName = $slotInfo.DefaultHostName
+          $url = "https://$defaultHostName/api/customers"
           
-          Write-Host "Target Testing URL: $url"
+          Write-Host "Real Determined Target URL: $url"
           
-          # Retry loop to allow the Azure App Service up to 30 seconds to wake up (Cold Start)
           $retryCount = 0
           $maxRetries = 3
           $success = $false
 
           while ($retryCount -lt $maxRetries -and -not $success) {
           try {
-                  Write-Host "Attempt $($retryCount + 1): Sending GET request to application slot..."
+                  Write-Host "Attempt $($retryCount + 1): Querying endpoint..."
                   $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10
-                  
-                  # Log the response to the pipeline output window for easy debugging
-                  Write-Host "Response received: $($response | ConvertTo-Json -Compress)"
+                  Write-Host "Response: $($response | ConvertTo-Json -Compress)"
                   $success = $true
           } catch {
-                  Write-Host "Warning: Application is still warming up or returned an error: $_"
+                  Write-Host "Warming up: $_"
                   $retryCount++
-                  if ($retryCount -lt $maxRetries) {
-                      Write-Host "Waiting 10 seconds before retrying..."
-                      Start-Sleep -Seconds 10
-                  }
+                  if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds 10 }
               }
           }
 
-          if (-not $success) {
-              Write-Error "FAILURE: GET Customer Test Failed after $maxRetries attempts."
-              throw "Application endpoint did not respond successfully."
-          }
+          if (-not $success) { throw "Application endpoint failed to resolve." }
           
-          Write-Host "SUCCESS: GET Baseline Endpoint Test Passed"
-
-    - task: PowerShell@2
-      displayName: 'Execute HTTP POST Creation Test'
+    - task: AzurePowerShell@5
+      displayName: 'Execute Dynamic HTTP POST Creation Test'
       inputs:
-        targetType: inline
-        script: |
-          $appName = "$(appServiceName)"
-          $baseUrl = "https://$appName-staging-qa.azurewebsites.net/api/customers"
+        azureSubscription: '$(serviceConnectionName)'
+        ScriptType: 'InlineScript'
+        azurePowerShellVersion: 'LatestVersion'
+        Inline: |
+          $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
+          $baseUrl = "https://$($slotInfo.DefaultHostName)/api/customers"
           $customerId = Get-Random -Minimum 10000 -Maximum 99999
           
           $body = @{
@@ -153,16 +148,15 @@ stages:
               city = "Chennai"
           } | ConvertTo-Json
 
-          Write-Host "Sending POST request to create customer ID: $customerId"
+          Write-Host "Sending POST to: $baseUrl"
           Invoke-RestMethod -Uri $baseUrl -Method Post -Body $body -ContentType "application/json"
-          Write-Host "SUCCESS: POST Execution Completed"
 
-          Write-Host "Verifying customer records by hitting: $baseUrl/$customerId"
+          Write-Host "Verifying ID at: $baseUrl/$customerId"
           $customer = Invoke-RestMethod -Uri "$baseUrl/$customerId" -Method Get
           if ($customer.id -eq $customerId) {
-              Write-Host "SUCCESS: Verification Logic Integrity Validated"
+              Write-Host "SUCCESS: Flow Verified Successfully."
           } else {
-              throw "FAILURE: Verification Mismatch Detected"
+              throw "Verification Mismatch."
           }
 
 # ==========================================
@@ -174,14 +168,17 @@ stages:
   jobs:
   - job: PerformanceValidation
     steps:
-    - task: PowerShell@2
+    - task: AzurePowerShell@5
       displayName: 'Verify Response Time Tolerances'
       inputs:
-        targetType: inline
-        script: |
-          $url = "https://aecsazuredevopslogicapp.azurewebsites.net/api/customers"
-          $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        azureSubscription: '$(serviceConnectionName)'
+        ScriptType: 'InlineScript'
+        azurePowerShellVersion: 'LatestVersion'
+        Inline: |
+          $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
+          $url = "https://$($slotInfo.DefaultHostName)/api/customers"
           
+          $watch = [System.Diagnostics.Stopwatch]::StartNew()
           Invoke-RestMethod -Uri $url -Method Get
           $watch.Stop()
           
@@ -189,6 +186,6 @@ stages:
           Write-Host "Measured Response Metric = $elapsed ms"
 
           if ($elapsed -gt 3000) {
-              throw "FAILURE: Latency breach. Performance took more than 3 seconds."
+              throw "FAILURE: Latency breach."
           }
-          Write-Host "SUCCESS: Latency metrics within target bounds."
+          Write-Host "SUCCESS: Performance within bounds."
