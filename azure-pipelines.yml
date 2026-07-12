@@ -32,7 +32,7 @@ stages:
     - task: Cache@2
       displayName: 'Cache NuGet Packages'
       inputs:
-        key: 'nuget | "$(Agent.OS)" | **/AecsTestDeployWebApp.csproj'
+        key: 'nuget | "$(Agent.OS)" | **/DemoLogicAppApi.csproj'
         restoreKeys: |
           nuget | "$(Agent.OS)"
         path: $(NUGET_PACKAGES_DIRECTORY)
