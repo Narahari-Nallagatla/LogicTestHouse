@@ -6,13 +6,11 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
-  # -------------------------------------------------------------------------
-  # ENVIRONMENT ADJUSTMENT PARAMETERS: 
-  # These variables correctly link your pipeline to your Azure Cloud environment.
-  # -------------------------------------------------------------------------
   serviceConnectionName: 'MyAzureResourceConnection' 
   appServiceName: 'DemoLogicAppApi'
   resourceGroupName: 'WP_SL_User_187'
+  # Global variable pointing to the location where NuGet stores packages on Windows agents
+  NUGET_PACKAGES_DIRECTORY: '$(Pipeline.Workspace)/.nuget/packages'
 
 stages:
 
@@ -24,31 +22,46 @@ stages:
   jobs:
   - job: BuildJob
     steps:
+    # 1. Check for Pre-installed .NET SDK to save installation time
     - task: UseDotNet@2
-      displayName: 'Install .NET 9 SDK'
+      displayName: 'Use Pre-installed .NET SDK'
       inputs:
         packageType: sdk
         version: '9.x'
+        performMultiLevelLookup: true
 
+    # 2. KEY ADDITION: Smart Cache layer for NuGet packages
+    - task: Cache@2
+      displayName: 'Cache NuGet Packages'
+      inputs:
+        key: 'nuget | "$(Agent.OS)" | **/packages.lock.json, !**/bin/**, !**/obj/**'
+        restoreKeys: |
+          nuget | "$(Agent.OS)"
+        path: $(NUGET_PACKAGES_DIRECTORY)
+        cacheHitVar: 'CACHE_RESTORED' # Sets a true/false variable if packages are found
+
+    # 3. Restore NuGet dependencies (Skips downloads if CACHE_RESTORED is true)
     - task: DotNetCoreCLI@2
       displayName: 'Restore NuGet Dependencies'
       inputs:
         command: restore
         projects: '**/*.csproj'
+        # Instructs the .NET CLI to look directly into our custom cache directory path
+        restoreArguments: '--packages $(NUGET_PACKAGES_DIRECTORY)'
 
     - task: DotNetCoreCLI@2
       displayName: 'Compile Project Binaries'
       inputs:
         command: build
         projects: '**/*.csproj'
-        arguments: '--configuration $(buildConfiguration)'
+        arguments: '--configuration $(buildConfiguration) --no-restore' # --no-restore saves extra time
 
     - task: DotNetCoreCLI@2
       displayName: 'Publish Deployment Package'
       inputs:
         command: publish
         publishWebProjects: true
-        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory) --no-restore'
         zipAfterPublish: true
 
     - publish: $(Build.ArtifactStagingDirectory)
@@ -69,11 +82,12 @@ stages:
       displayName: 'Download Compilation Artifacts'
 
     - task: AzureWebApp@1
-      displayName: 'Deploy Package to Staging Slot'
+      displayName: 'Deploy Package to Target Web App'
       inputs:
         azureSubscription: '$(serviceConnectionName)'
         appType: 'webApp'
         appName: '$(appServiceName)'
+        # OPTIMIZED ACTION: If your App Service does not have slots enabled, set this to false
         deployToSlotOrASE: true
         resourceGroupName: '$(resourceGroupName)'
         slotName: 'staging-qa'
