@@ -28,7 +28,6 @@ stages:
         version: '9.x'
         performMultiLevelLookup: true
 
-    # OPTIMIZED FIX: Fingerprint is now generated using the existing .csproj file structure
     - task: Cache@2
       displayName: 'Cache NuGet Packages'
       inputs:
@@ -97,7 +96,6 @@ stages:
   jobs:
   - job: ValidateAPI
     steps:
-    # OPTIMIZED: Changed to an Azure PowerShell task to dynamically find the correct slot URL directly from Azure
     - task: AzurePowerShell@5
       displayName: 'Execute Dynamic HTTP GET Endpoint Test'
       inputs:
@@ -106,8 +104,7 @@ stages:
         azurePowerShellVersion: 'LatestVersion'
         Inline: |
           $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
-          $defaultHostName = $slotInfo.DefaultHostName
-          $url = "https://$defaultHostName/api/customers"
+          $url = "https://$($slotInfo.DefaultHostName)/api/customers"
           
           Write-Host "Real Determined Target URL: $url"
           
@@ -189,3 +186,23 @@ stages:
               throw "FAILURE: Latency breach."
           }
           Write-Host "SUCCESS: Performance within bounds."
+# ==========================================
+# STAGE 5: AUTOMATED PRODUCTION PROMOTION
+# ==========================================
+- stage: PromoteToProduction
+  displayName: 'Promote Code to Production'
+  # This stage executes only after all QA tests and performance metrics pass cleanly
+  dependsOn: NonFunctionalTest
+  jobs:
+  - job: SwapSlotsJob
+    displayName: 'Swap Staging Slot into Production'
+    steps:
+    - task: AzureAppServiceManage@0
+      displayName: 'Execute Azure Slot Swap'
+      inputs:
+        azureSubscription: '$(serviceConnectionName)'
+        Action: 'Swap Slots'
+        WebAppName: '$(appServiceName)'
+        ResourceGroupName: '$(resourceGroupName)'
+        SourceSlot: 'staging-qa'
+        # Leaving TargetSlot blank tells Azure DevOps to target the primary Production slot automatically
