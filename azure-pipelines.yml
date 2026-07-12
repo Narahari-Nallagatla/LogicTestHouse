@@ -1,8 +1,3 @@
-# ASP.NET Core (.NET Framework)
-# Build and test ASP.NET Core projects targeting the full .NET Framework.
-# Add steps that publish symbols, save build artifacts, and more:
-# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
-
 trigger:
 - master
 
@@ -11,6 +6,13 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
+  # -------------------------------------------------------------------------
+  # ENVIRONMENT ADJUSTMENT PARAMETERS: 
+  # Modify these three target strings to match your custom cloud naming profiles.
+  # -------------------------------------------------------------------------
+  serviceConnectionName: 'MyAzureResourceConnection' 
+  appServiceName: 'DemoLogicAppApi'
+  resourceGroupName: 'WP_SL_User_187'
 
 stages:
 
@@ -73,11 +75,11 @@ stages:
           - task: AzureWebApp@1
             displayName: 'Deploy Package to Staging Slot'
             inputs:
-              azureSubscription: 'myservice-connection' # Update to match your approved Service Connection
+              azureSubscription: '$(serviceConnectionName)'
               appType: 'webApp'
-              appName: 'aecstestdeployWebApp'            # Update to match your Azure App Service Name
+              appName: '$(appServiceName)'
               deployToSlotOrASE: true
-              resourceGroupName: 'WP_SL_User_087'
+              resourceGroupName: '$(resourceGroupName)'
               slotName: 'staging-qa'
               package: '$(Pipeline.Workspace)/drop/**/*.zip'
 
@@ -114,8 +116,8 @@ stages:
           
           $body = @{
               id = $customerId
-              name = "Annie Pipeline"
-              email = "annie@test.com"
+              name = "Hari Pipeline"
+              email = "hari@test.com"
               city = "Chennai"
           } | ConvertTo-Json
 
