@@ -8,7 +8,7 @@ variables:
   buildConfiguration: 'Release'
   # -------------------------------------------------------------------------
   # ENVIRONMENT ADJUSTMENT PARAMETERS: 
-  # Modify these three target strings to match your custom cloud naming profiles.
+  # These variables correctly link your pipeline to your Azure Cloud environment.
   # -------------------------------------------------------------------------
   serviceConnectionName: 'MyAzureResourceConnection' 
   appServiceName: 'DemoLogicAppApi'
@@ -62,26 +62,22 @@ stages:
   displayName: 'Deploy to QA Environment'
   dependsOn: Build
   jobs:
-  - deployment: QADeploy
-    environment: QA
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - download: current
-            artifact: drop
-            displayName: 'Download Compilation Artifacts'
+  - job: QADeployJob
+    steps:
+    - download: current
+      artifact: drop
+      displayName: 'Download Compilation Artifacts'
 
-          - task: AzureWebApp@1
-            displayName: 'Deploy Package to Staging Slot'
-            inputs:
-              azureSubscription: '$(serviceConnectionName)'
-              appType: 'webApp'
-              appName: '$(appServiceName)'
-              deployToSlotOrASE: true
-              resourceGroupName: '$(resourceGroupName)'
-              slotName: 'staging-qa'
-              package: '$(Pipeline.Workspace)/drop/**/*.zip'
+    - task: AzureWebApp@1
+      displayName: 'Deploy Package to Staging Slot'
+      inputs:
+        azureSubscription: '$(serviceConnectionName)'
+        appType: 'webApp'
+        appName: '$(appServiceName)'
+        deployToSlotOrASE: true
+        resourceGroupName: '$(resourceGroupName)'
+        slotName: 'staging-qa'
+        package: '$(Pipeline.Workspace)/drop/**/*.zip'
 
 # ==========================================
 # STAGE 3: QA FUNCTIONAL TEST VERIFICATION
@@ -97,7 +93,8 @@ stages:
       inputs:
         targetType: inline
         script: |
-          $url = "https://aecstestdeploywebapp-staging-qa.azurewebsites.net/api/customers"
+          $appName = "$(appServiceName)"
+          $url = "https://$appName-staging-qa.azurewebsites.net/api/customers"
           try {
               $response = Invoke-RestMethod -Uri $url -Method Get
               Write-Host "SUCCESS: GET Customer Test Passed"
@@ -111,7 +108,8 @@ stages:
       inputs:
         targetType: inline
         script: |
-          $baseUrl = "https://aecstestdeploywebapp-staging-qa.azurewebsites.net/api/customers"
+          $appName = "$(appServiceName)"
+          $baseUrl = "https://$appName-staging-qa.azurewebsites.net/api/customers"
           $customerId = Get-Random -Minimum 10000 -Maximum 99999
           
           $body = @{
