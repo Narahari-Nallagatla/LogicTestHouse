@@ -6,18 +6,14 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
-  serviceConnectionName: 'MyAzureResourceConnection' 
-  appServiceName: 'DemoLogicAppApi'
-  resourceGroupName: 'WP_SL_User_187'
   NUGET_PACKAGES_DIRECTORY: '$(Pipeline.Workspace)/.nuget/packages'
 
 stages:
-
-# ==========================================
-# STAGE 1: COMPILATION & ARTIFACT PACKAGING
-# ==========================================
+# ==========================================================
+# STAGE 1: COMPILATION & ARTIFACT PACKAGING ONLY
+# ==========================================================
 - stage: Build
-  displayName: 'Build MVC Application'
+  displayName: 'Build MVC Application Artifact'
   jobs:
   - job: BuildJob
     steps:
@@ -31,7 +27,7 @@ stages:
     - task: Cache@2
       displayName: 'Cache NuGet Packages'
       inputs:
-        key: 'nuget | "$(Agent.OS)" | **/DemoLogicAppApi.csproj'
+        key: 'nuget | "$(Agent.OS)" | **/*.csproj'
         restoreKeys: |
           nuget | "$(Agent.OS)"
         path: $(NUGET_PACKAGES_DIRECTORY)
@@ -59,215 +55,7 @@ stages:
         arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory) --no-restore'
         zipAfterPublish: true
 
+    # The resulting drop artifact will be consumed by the Classic Release Pipeline
     - publish: $(Build.ArtifactStagingDirectory)
       artifact: drop
-      displayName: 'Upload Artifact to Pipeline Workspace'
-
-# ==========================================
-# STAGE 2: QA TARGET DEPLOYMENT
-# ==========================================
-- stage: DeployQA
-  displayName: 'Deploy to QA Environment'
-  dependsOn: Build
-  jobs:
-  - job: QADeployJob
-    steps:
-    - download: current
-      artifact: drop
-      displayName: 'Download Compilation Artifacts'
-
-    - task: AzureWebApp@1
-      displayName: 'Deploy Package to Target Web App'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        appType: 'webApp'
-        appName: '$(appServiceName)'
-        deployToSlotOrASE: true
-        resourceGroupName: '$(resourceGroupName)'
-        slotName: 'staging-qa'
-        package: '$(Pipeline.Workspace)/drop/**/*.zip'
-
-# ==========================================
-# STAGE 3: QA FUNCTIONAL TEST VERIFICATION
-# ==========================================
-- stage: APIFunctionalTest
-  displayName: 'API Functional Validation'
-  dependsOn: DeployQA
-  jobs:
-  - job: ValidateAPI
-    steps:
-    - task: AzurePowerShell@5
-      displayName: 'Execute Dynamic HTTP GET Endpoint Test'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        ScriptType: 'InlineScript'
-        azurePowerShellVersion: 'LatestVersion'
-        Inline: |
-          $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
-          $url = "https://$($slotInfo.DefaultHostName)/api/customers"
-          
-          Write-Host "Real Determined Target URL: $url"
-          
-          $retryCount = 0
-          $maxRetries = 3
-          $success = $false
-
-          while ($retryCount -lt $maxRetries -and -not $success) {
-          try {
-                  Write-Host "Attempt $($retryCount + 1): Querying endpoint..."
-                  $response = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 10
-                  Write-Host "Response: $($response | ConvertTo-Json -Compress)"
-                  $success = $true
-          } catch {
-                  Write-Host "Warming up: $_"
-                  $retryCount++
-                  if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds 10 }
-              }
-          }
-
-          if (-not $success) { throw "Application endpoint failed to resolve." }
-          
-    - task: AzurePowerShell@5
-      displayName: 'Execute Dynamic HTTP POST Creation Test'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        ScriptType: 'InlineScript'
-        azurePowerShellVersion: 'LatestVersion'
-        Inline: |
-          $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
-          $baseUrl = "https://$($slotInfo.DefaultHostName)/api/customers"
-          $customerId = Get-Random -Minimum 10000 -Maximum 99999
-          
-          $body = @{
-              id = $customerId
-              name = "Hari Pipeline"
-              phoneNo = "9876543210"
-              address = "Chennai"
-              amt     = 5000
-          } | ConvertTo-Json
-
-          Write-Host "Sending POST to: $baseUrl"
-          Invoke-RestMethod -Uri $baseUrl -Method Post -Body $body -ContentType "application/json"
-
-          Write-Host "Verifying ID at: $baseUrl/$customerId"
-          $customer = Invoke-RestMethod -Uri "$baseUrl/$customerId" -Method Get
-          if ($customer.id -eq $customerId) {
-              Write-Host "SUCCESS: Flow Verified Successfully."
-          } else {
-              throw "Verification Mismatch."
-          }
-
-# ==========================================
-# STAGE 4: NON-FUNCTIONAL PERFORMANCE TESTS
-# ==========================================
-- stage: NonFunctionalTest
-  displayName: 'Performance Metric Verification'
-  dependsOn: APIFunctionalTest
-  jobs:
-  - job: PerformanceValidation
-    steps:
-    - task: AzurePowerShell@5
-      displayName: 'Verify Response Time Tolerances'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        ScriptType: 'InlineScript'
-        azurePowerShellVersion: 'LatestVersion'
-        Inline: |
-          $slotInfo = Get-AzWebAppSlot -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)" -Slot "staging-qa"
-          $url = "https://$($slotInfo.DefaultHostName)/api/customers"
-          
-          $watch = [System.Diagnostics.Stopwatch]::StartNew()
-          Invoke-RestMethod -Uri $url -Method Get
-          $watch.Stop()
-          
-          $elapsed = $watch.ElapsedMilliseconds
-          Write-Host "Measured Response Metric = $elapsed ms"
-
-          if ($elapsed -gt 3000) {
-              throw "FAILURE: Latency breach."
-          }
-          Write-Host "SUCCESS: Performance within bounds."
-# ==========================================
-# STAGE 5: AUTOMATED PRODUCTION PROMOTION & TESTING
-# ==========================================
-- stage: PromoteToProduction
-  displayName: 'Promote and Test Production'
-  dependsOn: NonFunctionalTest
-  jobs:
-  - job: SwapSlotsJob
-    displayName: 'Swap Staging Slot into Production'
-    steps:
-    # 1. Swap the verified code into the production environment
-    - task: AzureAppServiceManage@0
-      displayName: 'Execute Azure Slot Swap'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        Action: 'Swap Slots'
-        WebAppName: '$(appServiceName)'
-        ResourceGroupName: '$(resourceGroupName)'
-        SourceSlot: 'staging-qa'
-
-    # 2. NEW TESTING ADDITION: Dynamic HTTP POST to the real Production URL
-    - task: AzurePowerShell@5
-      displayName: 'Production Functional POST Verification'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        ScriptType: 'InlineScript'
-        azurePowerShellVersion: 'LatestVersion'
-        Inline: |
-          # Fetch production app settings dynamically
-          $prodApp = Get-AzWebApp -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)"
-          $baseUrl = "https://$($prodApp.DefaultHostName)/api/customers"
-          $prodCustomerId = 88888
-          
-          $body = @{
-              id      = $prodCustomerId
-              name    = "Production Live Tester"
-              phoneNo = "1112223333"
-              address = "Live Environment"
-              amt     = 9999
-          } | ConvertTo-Json
-
-          Write-Host "Targeting Live Production Endpoint: $baseUrl"
-          
-          # Retry execution in case production IIS worker process is starting up
-          $success = $false
-          for ($i=1; $i -le 3; $i++) {
-              try {
-                  Write-Host "Sending automated POST verification record (Attempt $i)..."
-                  Invoke-RestMethod -Uri $baseUrl -Method Post -Body $body -ContentType "application/json" -TimeoutSec 15
-                  $success = $true
-                  break
-              } catch {
-                  Write-Host "Production warming up: $_"
-                  Start-Sleep -Seconds 10
-              }
-          }
-          if (-not $success) { throw "CRITICAL: Live Production writing failed." }
-          Write-Host "SUCCESS: Live Production POST Data Seeding Complete."
-
-    # 3. NEW TESTING ADDITION: Dynamic HTTP GET to check the created record on Production
-    - task: AzurePowerShell@5
-      displayName: 'Production Functional GET Verification'
-      inputs:
-        azureSubscription: '$(serviceConnectionName)'
-        ScriptType: 'InlineScript'
-        azurePowerShellVersion: 'LatestVersion'
-        Inline: |
-          $prodApp = Get-AzWebApp -ResourceGroupName "$(resourceGroupName)" -Name "$(appServiceName)"
-          $url = "https://$($prodApp.DefaultHostName)/api/customers/88888"
-          
-          Write-Host "Querying Production URL: $url"
-          try {
-              $customer = Invoke-RestMethod -Uri $url -Method Get -TimeoutSec 15
-              Write-Host "Production Verification Payload: $($customer | ConvertTo-Json -Compress)"
-              
-              if ($customer.id -eq 88888) {
-                  Write-Host "SUCCESS: Production Data Verification Completed Perfectly!"
-              } else {
-                  throw "Data validation mismatch on production."
-              }
-          } catch {
-              Write-Error "CRITICAL: Production GET Verification Failed: $_"
-              throw
-          }
+      displayName: 'Upload Build Artifact drop'
