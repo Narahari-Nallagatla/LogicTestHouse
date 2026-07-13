@@ -6,12 +6,13 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
-  # The lowercase login URL of your Azure Container Registry
   acrLoginServer: 'acrmylogicapp187.azurecr.io' 
   imageRepository: 'demo-logic-app-api'
   dockerRegistryServiceConnection: 'MyACRConnection'
   kubernetesServiceConnection: 'MyAKSConnection'
   tag: '$(Build.BuildId)'
+  # Combines the registry server and repository name into one standard format
+  fullImageName: 'acrmylogicapp187.azurecr.io/demo-logic-app-api'
 
 stages:
 # ==========================================
@@ -27,10 +28,9 @@ stages:
       displayName: 'Build Docker Image'
       inputs:
         command: 'build'
-        repository: $(imageRepository)
-        # Explicit path pointing directly inside your application project subfolder
+        # Using the fully qualified image path ensures local tag consistency
+        repository: $(fullImageName)
         dockerfile: '$(Build.SourcesDirectory)/DemoLogicAppApi/Dockerfile'
-        # Context remains at the root so Docker can copy solution references if needed
         buildContext: '$(Build.SourcesDirectory)'
         tags: |
           $(tag)
@@ -40,7 +40,7 @@ stages:
       displayName: 'Publish Image to ACR'
       inputs:
         containerRegistry: $(dockerRegistryServiceConnection)
-        repository: $(imageRepository)
+        repository: $(fullImageName)
         command: 'push'
         tags: |
           $(tag)
@@ -67,7 +67,6 @@ stages:
           - download: current
             artifact: k8s-manifests
 
-          # Native bash replacement step eliminates validation errors from missing extensions
           - script: |
               REAL_IMAGE="$(acrLoginServer)/$(imageRepository):$(tag)"
               sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" $(Pipeline.Workspace)/k8s-manifests/deployment.yml
