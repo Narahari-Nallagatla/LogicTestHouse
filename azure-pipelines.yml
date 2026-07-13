@@ -48,7 +48,8 @@ stages:
       displayName: 'Staging Kubernetes Manifests'
       inputs:
         SourceFolder: '$(Build.SourcesDirectory)'
-        Contents: '**/manifests/*.yml'
+        # Captures both .yml and .yaml extensions safely
+        Contents: '**/manifests/*.yam*'
         TargetFolder: '$(Build.ArtifactStagingDirectory)'
         CleanTargetFolder: true
         flattenFolders: true
@@ -77,11 +78,17 @@ stages:
           - download: current
             artifact: k8s-manifests
 
-          # FIX: Adjusted paths to match the flattened pipeline artifact structure
+          # FIX: Diagnostic file checking + Dynamic find execution
           - script: |
+              echo "=== Diagnostic: Listing all downloaded files ==="
+              ls -R $(Pipeline.Workspace)/k8s-manifests
+              
               REAL_IMAGE="$(acrLoginServer)/$(imageRepository):$(tag)"
-              echo "Injecting image target: ${REAL_IMAGE}"
-              sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" $(Pipeline.Workspace)/k8s-manifests/deployment.yml
+              echo "Target Image Path: ${REAL_IMAGE}"
+              
+              echo "=== Modifying deployment configuration ==="
+              # Finds the deployment file dynamically and updates it in place
+              find $(Pipeline.Workspace)/k8s-manifests -type f \( -name "*deployment.yml" -o -name "*deployment.yaml" \) -exec sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" {} +
             displayName: 'Inject Real ACR Image Path via Shell'
 
           - task: KubernetesManifest@1
@@ -90,7 +97,5 @@ stages:
               action: 'deploy'
               connectionType: 'kubernetesServiceConnection'
               kubernetesServiceConnection: $(kubernetesServiceConnection)
-              # FIX: Paths aligned with the verified flat container directory
-              manifests: |
-                $(Pipeline.Workspace)/k8s-manifests/deployment.yml
-                $(Pipeline.Workspace)/k8s-manifests/service.yml
+              # Points directly to the directory containing the files
+              manifests: '$(Pipeline.Workspace)/k8s-manifests'
