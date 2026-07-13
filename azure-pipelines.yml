@@ -44,10 +44,23 @@ stages:
           $(tag)
           latest
 
-    # FIX: Uses the absolute system variable prefix to point directly to the root manifests folder
-    - publish: '$(Build.SourcesDirectory)/manifests'
-      artifact: k8s-manifests
+    # Step A: Dynamically locate and copy manifest files safely out of any subdirectory
+    - task: CopyFiles@2
+      displayName: 'Staging Kubernetes Manifests'
+      inputs:
+        SourceFolder: '$(Build.SourcesDirectory)'
+        Contents: '**/manifests/*.yml'
+        TargetFolder: '$(Build.ArtifactStagingDirectory)'
+        CleanTargetFolder: true
+        flattenFolders: true
+
+    # Step B: Publish from the verified staging location instead of a hardcoded path
+    - task: PublishBuildArtifacts@1
       displayName: 'Publish Kubernetes Blueprints'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'k8s-manifests'
+        publishLocation: 'Container'
 
 # ==========================================
 # STAGE 2: KUBERNETES ORCHESTRATION & AKS DEPLOY
