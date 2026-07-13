@@ -25,7 +25,6 @@ stages:
     - task: Docker@2
       displayName: 'Build Docker Image'
       inputs:
-        # Adding the registry connection here forces Docker to auto-tag with the URL prefix
         containerRegistry: $(dockerRegistryServiceConnection)
         repository: $(imageRepository)
         command: 'build'
@@ -45,7 +44,8 @@ stages:
           $(tag)
           latest
 
-    - publish: manifests
+    # FIX: Uses the absolute system variable prefix to point directly to the root manifests folder
+    - publish: '$(Build.SourcesDirectory)/manifests'
       artifact: k8s-manifests
       displayName: 'Publish Kubernetes Blueprints'
 
