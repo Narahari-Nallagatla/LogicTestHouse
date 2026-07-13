@@ -6,6 +6,7 @@ pool:
   vmImage: 'ubuntu-latest'
 
 variables:
+  # The lowercase login URL of your Azure Container Registry
   acrLoginServer: 'acrmylogicapp187.azurecr.io' 
   imageRepository: 'demo-logic-app-api'
   dockerRegistryServiceConnection: 'MyACRConnection'
@@ -13,17 +14,24 @@ variables:
   tag: '$(Build.BuildId)'
 
 stages:
+# ==========================================
+# STAGE 1: CONTAINERIZATION & ACR REGISTRY PUSH
+# ==========================================
 - stage: BuildAndPush
   displayName: 'CI Stage: Containerize & Push'
   jobs:
   - job: BuildDockerJob
+    displayName: 'Execute Docker Build and Publish'
     steps:
     - task: Docker@2
       displayName: 'Build Docker Image'
       inputs:
         command: 'build'
         repository: $(imageRepository)
-        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        # Explicit path pointing directly inside your application project subfolder
+        dockerfile: '$(Build.SourcesDirectory)/DemoLogicAppApi/Dockerfile'
+        # Context remains at the root so Docker can copy solution references if needed
+        buildContext: '$(Build.SourcesDirectory)'
         tags: |
           $(tag)
           latest
@@ -42,11 +50,15 @@ stages:
       artifact: k8s-manifests
       displayName: 'Publish Kubernetes Blueprints'
 
+# ==========================================
+# STAGE 2: KUBERNETES ORCHESTRATION & AKS DEPLOY
+# ==========================================
 - stage: DeployToAKS
   displayName: 'CD Stage: Kubernetes Orchestration'
   dependsOn: BuildAndPush
   jobs:
   - deployment: DeployJob
+    displayName: 'Deploy to AKS Cluster Pods'
     environment: 'KubernetesProduction'
     strategy:
       runOnce:
@@ -55,6 +67,7 @@ stages:
           - download: current
             artifact: k8s-manifests
 
+          # Native bash replacement step eliminates validation errors from missing extensions
           - script: |
               REAL_IMAGE="$(acrLoginServer)/$(imageRepository):$(tag)"
               sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" $(Pipeline.Workspace)/k8s-manifests/deployment.yml
