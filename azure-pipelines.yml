@@ -53,7 +53,6 @@ stages:
         CleanTargetFolder: true
         flattenFolders: true
 
-    # FIX: Swapped out legacy Build Artifacts for the modern Pipeline Artifacts task
     - task: PublishPipelineArtifact@1
       displayName: 'Publish Kubernetes Blueprints'
       inputs:
@@ -75,12 +74,13 @@ stages:
       runOnce:
         deploy:
           steps:
-          # This will now successfully find the artifact bundle
           - download: current
             artifact: k8s-manifests
 
+          # FIX: Adjusted paths to match the flattened pipeline artifact structure
           - script: |
               REAL_IMAGE="$(acrLoginServer)/$(imageRepository):$(tag)"
+              echo "Injecting image target: ${REAL_IMAGE}"
               sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" $(Pipeline.Workspace)/k8s-manifests/deployment.yml
             displayName: 'Inject Real ACR Image Path via Shell'
 
@@ -90,6 +90,7 @@ stages:
               action: 'deploy'
               connectionType: 'kubernetesServiceConnection'
               kubernetesServiceConnection: $(kubernetesServiceConnection)
+              # FIX: Paths aligned with the verified flat container directory
               manifests: |
                 $(Pipeline.Workspace)/k8s-manifests/deployment.yml
                 $(Pipeline.Workspace)/k8s-manifests/service.yml
