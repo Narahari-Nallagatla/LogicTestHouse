@@ -11,8 +11,6 @@ variables:
   dockerRegistryServiceConnection: 'MyACRConnection'
   kubernetesServiceConnection: 'MyAKSConnection'
   tag: '$(Build.BuildId)'
-  # Combines the registry server and repository name into one standard format
-  fullImageName: 'acrmylogicapp187.azurecr.io/demo-logic-app-api'
 
 stages:
 # ==========================================
@@ -27,9 +25,10 @@ stages:
     - task: Docker@2
       displayName: 'Build Docker Image'
       inputs:
+        # Adding the registry connection here forces Docker to auto-tag with the URL prefix
+        containerRegistry: $(dockerRegistryServiceConnection)
+        repository: $(imageRepository)
         command: 'build'
-        # Using the fully qualified image path ensures local tag consistency
-        repository: $(fullImageName)
         dockerfile: '$(Build.SourcesDirectory)/DemoLogicAppApi/Dockerfile'
         buildContext: '$(Build.SourcesDirectory)'
         tags: |
@@ -40,7 +39,7 @@ stages:
       displayName: 'Publish Image to ACR'
       inputs:
         containerRegistry: $(dockerRegistryServiceConnection)
-        repository: $(fullImageName)
+        repository: $(imageRepository)
         command: 'push'
         tags: |
           $(tag)
