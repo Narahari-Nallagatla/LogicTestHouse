@@ -14,7 +14,7 @@ variables:
 
 stages:
 # ==========================================
-# STAGE 1: CONTAINERIZATION & ACR REGISTRY PUSH
+# STAGE 1: CONTAINERIZATION & ACR PUSH
 # ==========================================
 - stage: BuildAndPush
   displayName: 'CI Stage: Containerize & Push'
@@ -47,9 +47,8 @@ stages:
     - task: CopyFiles@2
       displayName: 'Staging Kubernetes Manifests'
       inputs:
-        SourceFolder: '$(Build.SourcesDirectory)'
-        # Captures both .yml and .yaml extensions safely
-        Contents: '**/manifests/*.yam*'
+        SourceFolder: '$(Build.SourcesDirectory)/manifests'
+        Contents: '*.yam*'
         TargetFolder: '$(Build.ArtifactStagingDirectory)'
         CleanTargetFolder: true
         flattenFolders: true
@@ -71,24 +70,19 @@ stages:
   - deployment: DeployJob
     displayName: 'Deploy to AKS Cluster Pods'
     environment: 'KubernetesProduction'
+    # FIX: Invalid 'options' block removed completely to pass pipeline parsing validation
     strategy:
       runOnce:
         deploy:
           steps:
+          # This cleanly and natively scopes the download to just the blueprints package
           - download: current
             artifact: k8s-manifests
+            displayName: 'Download Manifest Artifacts'
 
-          # FIX: Diagnostic file checking + Dynamic find execution
           - script: |
-              echo "=== Diagnostic: Listing all downloaded files ==="
-              ls -R $(Pipeline.Workspace)/k8s-manifests
-              
               REAL_IMAGE="$(acrLoginServer)/$(imageRepository):$(tag)"
-              echo "Target Image Path: ${REAL_IMAGE}"
-              
-              echo "=== Modifying deployment configuration ==="
-              # Finds the deployment file dynamically and updates it in place
-              find $(Pipeline.Workspace)/k8s-manifests -type f \( -name "*deployment.yml" -o -name "*deployment.yaml" \) -exec sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" {} +
+              find $(Pipeline.Workspace)/k8s-manifests -type f \( -name "*.yml" -o -name "*.yaml" \) -exec sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" {} +
             displayName: 'Inject Real ACR Image Path via Shell'
 
           - task: KubernetesManifest@1
@@ -97,5 +91,6 @@ stages:
               action: 'deploy'
               connectionType: 'kubernetesServiceConnection'
               kubernetesServiceConnection: $(kubernetesServiceConnection)
-              # Points directly to the directory containing the files
-              manifests: '$(Pipeline.Workspace)/k8s-manifests'
+              manifests: |
+                $(Pipeline.Workspace)/k8s-manifests/deployment.yml
+                $(Pipeline.Workspace)/k8s-manifests/service.yml
