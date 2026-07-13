@@ -3,77 +3,69 @@ trigger:
 - dev
 
 pool:
-  vmImage: 'windows-latest'
+  vmImage: 'ubuntu-latest'
 
 variables:
-  buildConfiguration: 'Release'
-  serviceConnectionName: 'MyAzureResourceConnection' 
-  appServiceName: 'DemoLogicAppApi'
-  resourceGroupName: 'WP_SL_User_187'
+  acrLoginServer: 'acrmylogicapp187.azurecr.io' 
+  imageRepository: 'demo-logic-app-api'
+  dockerRegistryServiceConnection: 'MyACRConnection'
+  kubernetesServiceConnection: 'MyAKSConnection'
+  tag: '$(Build.BuildId)'
 
 stages:
-
-# ==========================================
-# STAGE 1: COMPILATION & PACKAGING (BUILD)
-# ==========================================
-- stage: Build
-  displayName: 'Build C# Application Package'
+- stage: BuildAndPush
+  displayName: 'CI Stage: Containerize & Push'
   jobs:
-  - job: BuildJob
+  - job: BuildDockerJob
     steps:
-    - task: UseDotNet@2
-      displayName: 'Use Pre-installed .NET SDK'
+    - task: Docker@2
+      displayName: 'Build Docker Image'
       inputs:
-        packageType: sdk
-        version: '9.x'
+        command: 'build'
+        repository: $(imageRepository)
+        dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+        tags: |
+          $(tag)
+          latest
 
-    - task: DotNetCoreCLI@2
-      displayName: 'Restore Dependencies'
+    - task: Docker@2
+      displayName: 'Publish Image to ACR'
       inputs:
-        command: restore
-        projects: '*.sln'
+        containerRegistry: $(dockerRegistryServiceConnection)
+        repository: $(imageRepository)
+        command: 'push'
+        tags: |
+          $(tag)
+          latest
 
-    - task: DotNetCoreCLI@2
-      displayName: 'Compile Project Binaries'
-      inputs:
-        command: build
-        projects: '*.sln'
-        arguments: '--configuration $(buildConfiguration) --no-restore'
+    - publish: manifests
+      artifact: k8s-manifests
+      displayName: 'Publish Kubernetes Blueprints'
 
-    - task: DotNetCoreCLI@2
-      displayName: 'Publish Deployment Package'
-      inputs:
-        command: publish
-        publishWebProjects: true
-        arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory) --no-restore'
-        zipAfterPublish: true
-
-    - publish: $(Build.ArtifactStagingDirectory)
-      artifact: drop
-      displayName: 'Upload Artifact'
-
-# ==========================================
-# STAGE 2: AUTOMATED PRODUCTION DEPLOYMENT
-# ==========================================
-- stage: Stage_Prod
-  displayName: 'Stage-Prod Automated Deployment'
-  dependsOn: Build
+- stage: DeployToAKS
+  displayName: 'CD Stage: Kubernetes Orchestration'
+  dependsOn: BuildAndPush
   jobs:
-  - deployment: DeployToProdSlot
-    displayName: 'Deploy Package directly to Production Slot'
-    environment: 'Production'
+  - deployment: DeployJob
+    environment: 'KubernetesProduction'
     strategy:
       runOnce:
         deploy:
           steps:
           - download: current
-            artifact: drop
+            artifact: k8s-manifests
 
-          - task: AzureWebApp@1
-            displayName: 'Deploy directly to Main Production App Service'
+          - script: |
+              REAL_IMAGE="$(acrLoginServer)/$(imageRepository):$(tag)"
+              sed -i "s|__IMAGE_PLACEHOLDER__|${REAL_IMAGE}|g" $(Pipeline.Workspace)/k8s-manifests/deployment.yml
+            displayName: 'Inject Real ACR Image Path via Shell'
+
+          - task: KubernetesManifest@1
+            displayName: 'Deploy Manifests to AKS Cluster'
             inputs:
-              azureSubscription: '$(serviceConnectionName)'
-              appType: 'webApp'
-              appName: '$(appServiceName)'
-              deployToSlotOrASE: false
-              package: '$(Pipeline.Workspace)/drop/**/*.zip'
+              action: 'deploy'
+              connectionType: 'kubernetesServiceConnection'
+              kubernetesServiceConnection: $(kubernetesServiceConnection)
+              manifests: |
+                $(Pipeline.Workspace)/k8s-manifests/deployment.yml
+                $(Pipeline.Workspace)/k8s-manifests/service.yml
