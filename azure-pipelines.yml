@@ -44,7 +44,6 @@ stages:
           $(tag)
           latest
 
-    # Step A: Dynamically locate and copy manifest files safely out of any subdirectory
     - task: CopyFiles@2
       displayName: 'Staging Kubernetes Manifests'
       inputs:
@@ -54,13 +53,13 @@ stages:
         CleanTargetFolder: true
         flattenFolders: true
 
-    # Step B: Publish from the verified staging location instead of a hardcoded path
-    - task: PublishBuildArtifacts@1
+    # FIX: Swapped out legacy Build Artifacts for the modern Pipeline Artifacts task
+    - task: PublishPipelineArtifact@1
       displayName: 'Publish Kubernetes Blueprints'
       inputs:
-        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'k8s-manifests'
-        publishLocation: 'Container'
+        targetPath: '$(Build.ArtifactStagingDirectory)'
+        artifact: 'k8s-manifests'
+        publishLocation: 'pipeline'
 
 # ==========================================
 # STAGE 2: KUBERNETES ORCHESTRATION & AKS DEPLOY
@@ -76,6 +75,7 @@ stages:
       runOnce:
         deploy:
           steps:
+          # This will now successfully find the artifact bundle
           - download: current
             artifact: k8s-manifests
 
